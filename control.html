@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Uniliga CG Fullscreen Overlay Control Panel</title>
+    <style>
+      body {
+        margin: 2%;
+        margin-block: 10px;
+        display: grid;
+        grid-auto-flow: row;
+        grid-template-columns: 1fr 1fr;
+        width: 96%;
+        place-items: center;
+        justify-content: center;
+        gap: 10px;
+      }
+      button {
+        padding: 5px;
+        font-size: 16px;
+        width: 100%;
+      }
+      #show {
+        border-color: green;
+        color: green;
+      }
+      #hide {
+        border-color: red;
+        color: red;
+      }
+      #urlInput {
+        text-align: center;
+        font-size: 16px;
+        height: 100%;
+        width: 100%;
+      }
+      #shutdown {
+        background-color: #fc6265;
+      }
+    </style>
+  </head>
+  <body>
+    <input type="text" id="urlInput" placeholder="Enter New Overlay URL" />
+    <button id="loadUrl">Load New Overlay URL</button>
+    <button id="runScript">Rerun CS2 WebSocket Script</button>
+    <button id="refresh">Refresh Overlay</button>
+    <button id="show">Show Fullscreen Overlay</button>
+    <button id="hide">Hide Fullscreen Overlay</button>
+    <button id="openLogButton">Open Message Log Window</button>
+    <button id="shutdown">Shutdown App</button>
+
+    <script>
+      const { ipcRenderer } = require("electron");
+
+      // Function to handle loading URL
+      function loadURL() {
+        const urlInput = document.getElementById("urlInput").value;
+        ipcRenderer.send("load-url", urlInput);
+      }
+
+      document.getElementById("loadUrl").addEventListener("click", loadURL);
+
+      document.getElementById("runScript").addEventListener("click", () => {
+        ipcRenderer.send("run-csgo-websocket-script");
+      });
+
+      document.getElementById("refresh").addEventListener("click", () => {
+        ipcRenderer.send("refresh-main-window");
+      });
+
+      document.getElementById("hide").addEventListener("click", () => {
+        ipcRenderer.send("hide-overlay");
+      });
+
+      document.getElementById("show").addEventListener("click", () => {
+        ipcRenderer.send("show-overlay");
+      });
+
+      document.getElementById("shutdown").addEventListener("click", () => {
+        ipcRenderer.send("shutdown-app");
+      });
+
+      document.getElementById("openLogButton").addEventListener("click", () => {
+        const { ipcRenderer } = require("electron");
+        ipcRenderer.send("open-log-window");
+      });
+    </script>
+  </body>
+</html>

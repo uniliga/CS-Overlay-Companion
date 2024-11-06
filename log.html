@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>CS GSI Log Output</title>
+  </head>
+  <body>
+    <div id="log"></div>
+    <script>
+      const { ipcRenderer } = require("electron");
+
+      function escapeHTML(html) {
+        return html
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#039;");
+      }
+
+      ipcRenderer.on("log", (event, message) => {
+        const logElement = document.getElementById("log");
+
+        try {
+          // Parse the JSON string and then stringify it with indentation
+          const obj = JSON.parse(message);
+          const formattedMessage = JSON.stringify(obj, null, 2); // Indent with 2 spaces
+          logElement.innerHTML += `<pre>${escapeHTML(
+            formattedMessage
+          )}</pre><br>`;
+        } catch (e) {
+          // If parsing fails, display the original message
+          logElement.innerHTML += `<pre>${escapeHTML(message)}</pre><br>`;
+        }
+
+        // Always scroll to the bottom after adding a new message
+        setTimeout(() => {
+          logElement.scrollTop =
+            logElement.scrollHeight - logElement.clientHeight;
+        }, 0);
+      });
+    </script>
+  </body>
+</html>

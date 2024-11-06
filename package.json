@@ -1,0 +1,38 @@
+{
+  "name": "uniliga-cg-cs-gsi",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "author": "Niklas Loos",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^23.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "productName": "Uniliga CG CS GSI",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "control.html",
+      "log.html",
+      "package.json"
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "icon.ico"
+    }
+  },
+  "dependencies": {
+    "csgo-gsi-types": "^1.0.7",
+    "node-csgo-gsi": "^0.0.5",
+    "ws": "^8.17.1"
+  }
+}
