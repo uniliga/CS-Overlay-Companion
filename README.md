@@ -2,7 +2,7 @@
 
 The zip found in the [releases tab](https://github.com/uniliga/CS-Overlay-Companion/releases/) holds three files:
 
-- Uniliga CS Overlay Companion 1.0.1.exe
+- Uniliga CS Overlay Companion VN.exe
 - gamestate_integration_uniligacg.cfg
 - uniliga-hud.cfg
 
