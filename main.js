@@ -28,7 +28,7 @@ function createMainWindow() {
     mainWindow.setAlwaysOnTop(true, "screen");
     mainWindow.setIgnoreMouseEvents(true, { forward: true });
     mainWindow.loadURL(
-      "https://uniliga.overlays.konopka.gg/d879c3e0-b8a7-45a5-8dff-52db9cf51387/games/cs2/ingame"
+      "https://overlays.uniliga.gg/d879c3e0-b8a7-45a5-8dff-52db9cf51387/games/cs2/ingame"
     );
 
     mainWindow.on("closed", () => {
