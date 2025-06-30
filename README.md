@@ -21,3 +21,8 @@ If you close the control panel or click "Shutdown App", the CS2 GSI will stop co
 Once you've loaded up the game, you also have to execute the uniliga-hud.cfg inside Counter-Strike by opening the ingame console and typing in "exec uniliga-hud.cfg". This will configure the ingame hud so that only the necessary ingame elements remain visible.
 
 That's it. Have fun.
+
+for dev:
+to install: npm i
+to run the app: npx electron main.js
+to build a new build: npm run dist
