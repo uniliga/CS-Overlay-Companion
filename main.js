@@ -1,49 +1,160 @@
-const { app, BrowserWindow, ipcMain } = require("electron");
+const { app, BrowserWindow, ipcMain, screen } = require("electron");
+const fs = require("fs");
+const path = require("path");
 
 const WebSocket = require("ws");
 const { WebSocketServer } = WebSocket;
 const CSGOGSI = require("node-csgo-gsi");
 
+const DEFAULT_OVERLAY_URL =
+  "https://overlays.uniliga.gg/cd6b409f-84e3-4adc-82b0-ef4e1e7f1605/games/cs2/ingame";
+const GSI_PORT = 55599;
+const WS_PORT = 55333;
+// Skip a client whose send buffer grows beyond this (slow/hung overlay)
+const MAX_BUFFERED_BYTES = 5 * 1024 * 1024;
+const RELOAD_DELAY_MS = 3000;
+// Layout size the overlay page is designed for; it gets zoomed to fill the screen
+const OVERLAY_BASE_WIDTH = 1920;
+const OVERLAY_BASE_HEIGHT = 1080;
+
+// Without this, Windows marks the overlay as occluded while a fullscreen game
+// is in front and Chromium stops painting / throttles it.
+app.commandLine.appendSwitch("disable-features", "CalculateNativeWinOcclusion");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+
 let mainWindow;
 let controlWindow;
 let logWindow;
-let childProcess = null;
-let isFullscreen = true;
+let overlayUrl = DEFAULT_OVERLAY_URL;
+let reloadTimer = null;
+let gsi = null;
+let wss = null;
+
+// Stored in %APPDATA%\CS Overlay Companion, survives portable exe restarts
+function configPath() {
+  return path.join(app.getPath("userData"), "config.json");
+}
+
+function loadConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(configPath(), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function saveConfig(config) {
+  try {
+    fs.writeFileSync(configPath(), JSON.stringify(config, null, 2));
+  } catch (error) {
+    logError("saving config", error);
+  }
+}
+
+function log(message) {
+  if (logWindow && !logWindow.isDestroyed()) {
+    logWindow.webContents.send("log", message);
+  }
+}
+
+function logError(context, error) {
+  const text = `Error (${context}): ${error && error.stack ? error.stack : error}`;
+  console.error(text);
+  log(text);
+}
+
+if (!app.requestSingleInstanceLock()) {
+  // Another instance already owns the GSI/WebSocket ports
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (controlWindow) {
+      if (controlWindow.isMinimized()) controlWindow.restore();
+      controlWindow.focus();
+    }
+  });
+
+  app.on("ready", () => {
+    overlayUrl = loadConfig().overlayUrl || DEFAULT_OVERLAY_URL;
+    createControlWindow();
+    startServers();
+  });
+}
+
+process.on("uncaughtException", (error) => logError("uncaught", error));
+process.on("unhandledRejection", (error) => logError("unhandled rejection", error));
+
+function scheduleOverlayReload(reason) {
+  log(`Overlay ${reason}, reloading in ${RELOAD_DELAY_MS / 1000}s`);
+  clearTimeout(reloadTimer);
+  reloadTimer = setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(overlayUrl);
+  }, RELOAD_DELAY_MS);
+}
 
 function createMainWindow() {
-  if (!mainWindow) {
-    mainWindow = new BrowserWindow({
-      width: 1920,
-      height: 1080,
-      frame: false,
-      fullscreen: isFullscreen,
-      transparent: true,
-      alwaysOnTop: true,
-      webPreferences: {
-        nodeIntegration: true,
-        contextIsolation: false,
-      },
-    });
-
-    mainWindow.setAlwaysOnTop(true, "screen");
-    mainWindow.setIgnoreMouseEvents(true, { forward: true });
-    mainWindow.loadURL(
-      "https://overlays.uniliga.gg/cd6b409f-84e3-4adc-82b0-ef4e1e7f1605/games/cs2/ingame"
-    );
-
-    mainWindow.on("closed", () => {
-      mainWindow = null;
-    });
-  } else {
+  if (mainWindow) {
     mainWindow.show();
+    return;
   }
+
+  const { x, y, width, height } = screen.getPrimaryDisplay().bounds;
+  mainWindow = new BrowserWindow({
+    x,
+    y,
+    width,
+    height,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    skipTaskbar: true,
+    focusable: false,
+    hasShadow: false,
+    alwaysOnTop: true,
+    webPreferences: {
+      // Remote page: no Node access
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      backgroundThrottling: false,
+    },
+  });
+
+  // Windows clamps the initial size to the work area (minus taskbar)
+  mainWindow.setBounds({ x, y, width, height });
+  mainWindow.setAlwaysOnTop(true, "screen-saver");
+  mainWindow.setVisibleOnAllWorkspaces(true);
+  mainWindow.setIgnoreMouseEvents(true, { forward: true });
+
+  // Bounds are in DIP, so this also accounts for Windows display scaling
+  // (4K @ 100% -> 2.0, 4K @ 200% -> 1.0). Zoom resets on navigation, so reapply.
+  const zoomFactor = Math.min(width / OVERLAY_BASE_WIDTH, height / OVERLAY_BASE_HEIGHT);
+  mainWindow.webContents.on("did-finish-load", () => {
+    mainWindow.webContents.setZoomFactor(zoomFactor);
+  });
+
+  mainWindow.webContents.on("did-fail-load", (event, code, description, url, isMainFrame) => {
+    // -3 = ERR_ABORTED, happens on normal navigation/reload
+    if (isMainFrame && code !== -3) scheduleOverlayReload(`failed to load (${description})`);
+  });
+  mainWindow.webContents.on("render-process-gone", (event, details) => {
+    scheduleOverlayReload(`renderer gone (${details.reason})`);
+  });
+  mainWindow.on("unresponsive", () => scheduleOverlayReload("unresponsive"));
+
+  mainWindow.loadURL(overlayUrl);
+
+  mainWindow.on("closed", () => {
+    clearTimeout(reloadTimer);
+    mainWindow = null;
+  });
 }
 
 function createControlWindow() {
   controlWindow = new BrowserWindow({
     width: 700,
     height: 220,
-    transparent: false,
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: true,
@@ -55,58 +166,74 @@ function createControlWindow() {
 
   controlWindow.on("closed", () => {
     controlWindow = null;
-    if (mainWindow) mainWindow.close();
+    app.quit();
   });
 }
 
 function createLogWindow() {
-  if (!logWindow) {
-    logWindow = new BrowserWindow({
-      width: 800,
-      height: 600,
-      autoHideMenuBar: true,
-      webPreferences: {
-        nodeIntegration: true,
-        contextIsolation: false,
-      },
-    });
-
-    logWindow.loadFile("log.html");
-
-    logWindow.on("closed", () => {
-      logWindow = null;
-    });
+  if (logWindow) {
+    logWindow.show();
+    return;
   }
+
+  logWindow = new BrowserWindow({
+    width: 800,
+    height: 600,
+    autoHideMenuBar: true,
+    webPreferences: {
+      nodeIntegration: true,
+      contextIsolation: false,
+    },
+  });
+
+  logWindow.loadFile("log.html");
+
+  logWindow.on("closed", () => {
+    logWindow = null;
+  });
 }
 
-function runCSGOScript() {
-  // Assuming gsiAll accepts callbacks for logging data and errors
-  gsiAll(
-    // onData callback
-    (data) => {
-      if (logWindow) {
-        logWindow.webContents.send("log", data.toString());
-      }
-    },
-    // onError callback
-    (error) => {
-      if (logWindow) {
-        logWindow.webContents.send("log", `Error: ${error.toString()}`);
-      }
-    },
-    // onClose callback
-    (code) => {
-      if (logWindow) {
-        logWindow.webContents.send("log", `Process exited with code ${code}`);
-      }
-    }
-  );
+// Resolves once both ports are released so they can be bound again
+function stopServers() {
+  const closing = [];
+  if (gsi) {
+    const { server } = gsi;
+    gsi.removeAllListeners();
+    gsi.stopC4Countdown();
+    closing.push(new Promise((resolve) => server.close(resolve)));
+    server.closeAllConnections();
+    gsi = null;
+  }
+  if (wss) {
+    const server = wss;
+    server.clients.forEach((client) => client.terminate());
+    closing.push(new Promise((resolve) => server.close(resolve)));
+    wss = null;
+  }
+  return Promise.all(closing);
 }
 
-app.on("ready", () => {
-  createControlWindow();
-  runCSGOScript();
-});
+function restartServers() {
+  stopServers().then(startServers);
+}
+
+function startServers() {
+  gsi = new CSGOGSI({ port: GSI_PORT });
+  gsi.server.on("error", (error) => logError(`GSI server on port ${GSI_PORT}`, error));
+  gsi.server.on("clientError", (error, socket) => socket.destroy());
+  gsi.on("all", gsiAll);
+
+  wss = new WebSocketServer({ port: WS_PORT });
+  wss.on("error", (error) => logError(`WebSocket server on port ${WS_PORT}`, error));
+  wss.on("connection", (ws) => {
+    ws.on("error", (error) => logError("WebSocket client", error));
+    ws.on("message", onMessage);
+    ws.send("connected to cs websocket server");
+    onConnection();
+  });
+
+  log(`GSI listening on ${GSI_PORT}, WebSocket on ${WS_PORT}`);
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -114,9 +241,12 @@ app.on("window-all-closed", () => {
   }
 });
 
+app.on("before-quit", () => {
+  stopServers();
+});
+
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    createMainWindow();
     createControlWindow();
   }
 });
@@ -125,85 +255,73 @@ ipcMain.on("refresh-main-window", () => {
   if (mainWindow) mainWindow.reload();
 });
 
-// IPC event for hiding the main window
 ipcMain.on("hide-overlay", () => {
-  if (mainWindow) {
-    mainWindow.close();
-  }
+  if (mainWindow) mainWindow.close();
 });
 
-// IPC event for showing the main window
 ipcMain.on("show-overlay", () => {
   createMainWindow();
 });
 
 ipcMain.on("load-url", (event, url) => {
-  if (mainWindow) mainWindow.loadURL(url);
+  let parsed;
+  try {
+    parsed = new URL(String(url).trim());
+  } catch {
+    log(`Invalid overlay URL: ${url}`);
+    return;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    log(`Invalid overlay URL: ${url}`);
+    return;
+  }
+  overlayUrl = parsed.href;
+  saveConfig({ ...loadConfig(), overlayUrl });
+  log(`Overlay URL saved: ${overlayUrl}`);
+  if (mainWindow) mainWindow.loadURL(overlayUrl);
 });
+
+ipcMain.handle("get-overlay-url", () => overlayUrl);
 
 ipcMain.on("shutdown-app", () => {
   app.quit();
 });
 
 ipcMain.on("run-csgo-websocket-script", () => {
-  runCSGOScript();
+  restartServers();
 });
 
 ipcMain.on("open-log-window", () => {
-  if (!logWindow) {
-    createLogWindow();
-  }
-  logWindow.show();
-});
-
-//CS GSI Websocket Script
-let gsi = new CSGOGSI({ port: 55599 });
-gsi.on("all", (data) => gsiAll(data));
-
-let wsPort = 55333;
-
-const wss = new WebSocketServer({
-  port: wsPort,
-});
-
-wss.on("connection", async (ws) => {
-  ws.on("error", console.error);
-
-  ws.on("message", (message) => onMessage(message));
-
-  ws.send("connected to cs websocket server");
-
-  onConnection();
+  createLogWindow();
 });
 
 function gsiAll(data) {
-  // console.log(data);
-  if (logWindow) {
-    logWindow.webContents.send("log", JSON.stringify(data));
-  }
-  const message = {
-    type: "csgsiAll",
-    projectid: "",
-    data: data,
-  };
-  wss.clients.forEach(function each(client) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify({ message }));
+  const payload = JSON.stringify({
+    message: { type: "csgsiAll", projectid: "", data },
+  });
+  log(payload);
+  if (!wss) return;
+  wss.clients.forEach((client) => {
+    if (
+      client.readyState === WebSocket.OPEN &&
+      client.bufferedAmount < MAX_BUFFERED_BYTES
+    ) {
+      client.send(payload);
     }
   });
 }
 
 function onMessage(message) {
-  console.log("Message received: ", message);
-  if (logWindow) {
-    logWindow.webContents.send("log", message);
-  }
+  const text = message.toString();
+  console.log("Message received: ", text);
+  log(text);
 }
 
 function onConnection() {
-  wss.clients.forEach(function each(client) {
+  const payload = JSON.stringify({ message: "CS GSI Connection established" });
+  wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify({ message: "CS GSI Connection established" }));
+      client.send(payload);
     }
   });
 }

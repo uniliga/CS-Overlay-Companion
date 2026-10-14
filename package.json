@@ -11,8 +11,8 @@
   "author": "Niklas Loos",
   "license": "MIT",
   "devDependencies": {
-    "electron": "^23.0.0",
-    "electron-builder": "^24.0.0"
+    "electron": "^44.7.2",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "productName": "CS Overlay Companion",
@@ -31,7 +31,6 @@
     }
   },
   "dependencies": {
-    "csgo-gsi-types": "^1.0.7",
     "node-csgo-gsi": "^0.0.5",
     "ws": "^8.17.1"
   }

@@ -41,7 +41,7 @@
   <body>
     <input type="text" id="urlInput" placeholder="Enter New Overlay URL" />
     <button id="loadUrl">Load New Overlay URL</button>
-    <button id="runScript">Rerun CS2 WebSocket Script</button>
+    <button id="runScript">Restart GSI / WebSocket Server</button>
     <button id="refresh">Refresh Overlay</button>
     <button id="show">Show Fullscreen Overlay</button>
     <button id="hide">Hide Fullscreen Overlay</button>
@@ -53,11 +53,16 @@
 
       // Function to handle loading URL
       function loadURL() {
-        const urlInput = document.getElementById("urlInput").value;
+        const urlInput = document.getElementById("urlInput").value.trim();
+        if (!urlInput) return;
         ipcRenderer.send("load-url", urlInput);
       }
 
       document.getElementById("loadUrl").addEventListener("click", loadURL);
+
+      ipcRenderer.invoke("get-overlay-url").then((url) => {
+        document.getElementById("urlInput").value = url;
+      });
 
       document.getElementById("runScript").addEventListener("click", () => {
         ipcRenderer.send("run-csgo-websocket-script");
@@ -80,7 +85,6 @@
       });
 
       document.getElementById("openLogButton").addEventListener("click", () => {
-        const { ipcRenderer } = require("electron");
         ipcRenderer.send("open-log-window");
       });
     </script>
