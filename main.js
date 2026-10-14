@@ -6,8 +6,6 @@ const WebSocket = require("ws");
 const { WebSocketServer } = WebSocket;
 const CSGOGSI = require("node-csgo-gsi");
 
-const DEFAULT_OVERLAY_URL =
-  "https://overlays.uniliga.gg/cd6b409f-84e3-4adc-82b0-ef4e1e7f1605/games/cs2/ingame";
 const GSI_PORT = 55599;
 const WS_PORT = 55333;
 // Skip a client whose send buffer grows beyond this (slow/hung overlay)
@@ -26,7 +24,7 @@ app.commandLine.appendSwitch("disable-background-timer-throttling");
 let mainWindow;
 let controlWindow;
 let logWindow;
-let overlayUrl = DEFAULT_OVERLAY_URL;
+let overlayUrl = "";
 let reloadTimer = null;
 let gsi = null;
 let wss = null;
@@ -76,7 +74,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on("ready", () => {
-    overlayUrl = loadConfig().overlayUrl || DEFAULT_OVERLAY_URL;
+    overlayUrl = loadConfig().overlayUrl || "";
     createControlWindow();
     startServers();
   });
@@ -89,7 +87,7 @@ function scheduleOverlayReload(reason) {
   log(`Overlay ${reason}, reloading in ${RELOAD_DELAY_MS / 1000}s`);
   clearTimeout(reloadTimer);
   reloadTimer = setTimeout(() => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.loadURL(overlayUrl);
+    if (mainWindow && !mainWindow.isDestroyed() && overlayUrl) mainWindow.loadURL(overlayUrl);
   }, RELOAD_DELAY_MS);
 }
 
@@ -143,7 +141,11 @@ function createMainWindow() {
   });
   mainWindow.on("unresponsive", () => scheduleOverlayReload("unresponsive"));
 
-  mainWindow.loadURL(overlayUrl);
+  if (overlayUrl) {
+    mainWindow.loadURL(overlayUrl);
+  } else {
+    log("No overlay URL set yet, enter one in the control panel");
+  }
 
   mainWindow.on("closed", () => {
     clearTimeout(reloadTimer);
