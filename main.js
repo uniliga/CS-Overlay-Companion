@@ -14,6 +14,8 @@ const RELOAD_DELAY_MS = 3000;
 // Layout size the overlay page is designed for; it gets zoomed to fill the screen
 const OVERLAY_BASE_WIDTH = 1920;
 const OVERLAY_BASE_HEIGHT = 1080;
+// How long a player has to be alive without any weapon before counting as coach
+const COACH_DETECT_MS = 3000;
 
 // Without this, Windows marks the overlay as occluded while a fullscreen game
 // is in front and Chromium stops painting / throttles it.
@@ -28,6 +30,13 @@ let overlayUrl = "";
 let reloadTimer = null;
 let gsi = null;
 let wss = null;
+// Manual choice from the control panel per steamid (true = shown), wins over coach detection
+let playerVisibility = {};
+const detectedCoaches = new Set();
+// steamid -> since when the player is alive without weapons
+const unarmedSince = new Map();
+let playerListJson = "";
+let lastAllPlayers = null;
 
 // Stored in %APPDATA%\CS Overlay Companion, survives portable exe restarts
 function configPath() {
@@ -74,7 +83,9 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.on("ready", () => {
-    overlayUrl = loadConfig().overlayUrl || "";
+    const config = loadConfig();
+    overlayUrl = config.overlayUrl || "";
+    playerVisibility = config.playerVisibility || {};
     createControlWindow();
     startServers();
   });
@@ -156,7 +167,7 @@ function createMainWindow() {
 function createControlWindow() {
   controlWindow = new BrowserWindow({
     width: 700,
-    height: 220,
+    height: 520,
     autoHideMenuBar: true,
     webPreferences: {
       nodeIntegration: true,
@@ -297,9 +308,87 @@ ipcMain.on("open-log-window", () => {
   createLogWindow();
 });
 
+ipcMain.handle("get-players", () => JSON.parse(playerListJson || "[]"));
+
+ipcMain.on("set-player-visible", (event, steamid, visible) => {
+  playerVisibility = { ...playerVisibility, [steamid]: !!visible };
+  saveConfig({ ...loadConfig(), playerVisibility });
+  log(`Player ${steamid} ${visible ? "shown" : "hidden"}`);
+  sendPlayerList(lastAllPlayers);
+});
+
+ipcMain.on("reset-player-visibility", () => {
+  playerVisibility = {};
+  saveConfig({ ...loadConfig(), playerVisibility });
+  log("Player visibility reset");
+  sendPlayerList(lastAllPlayers);
+});
+
+function isPlayerVisible(steamid) {
+  if (steamid in playerVisibility) return playerVisibility[steamid];
+  return !detectedCoaches.has(steamid);
+}
+
+// Coaches spawn alive in freezetime but never get a weapon, real players always have at least a knife.
+// The pattern has to last a moment so a single update right at spawn doesn't count.
+function detectCoaches(allplayers) {
+  const players = Object.entries(allplayers || {});
+  // Without "allplayers_weapons" in the GSI config every player would look unarmed
+  if (!players.some(([, player]) => Object.keys(player.weapons || {}).length)) return;
+  const now = Date.now();
+  for (const [steamid, player] of players) {
+    const unarmed = player.state && player.state.health > 0 && !Object.keys(player.weapons || {}).length;
+    if (!unarmed) {
+      unarmedSince.delete(steamid);
+      continue;
+    }
+    if (!unarmedSince.has(steamid)) unarmedSince.set(steamid, now);
+    if (now - unarmedSince.get(steamid) >= COACH_DETECT_MS && !detectedCoaches.has(steamid)) {
+      detectedCoaches.add(steamid);
+      log(`Coach detected: ${player.name} (${steamid})`);
+    }
+  }
+}
+
+// Copy of the GSI data without hidden players; node-csgo-gsi keeps working on the original
+function withoutHiddenPlayers(data) {
+  const strip = (players) =>
+    players && typeof players === "object"
+      ? Object.fromEntries(Object.entries(players).filter(([steamid]) => isPlayerVisible(steamid)))
+      : players;
+  const filtered = { ...data, allplayers: strip(data.allplayers) };
+  for (const key of ["previously", "added"]) {
+    if (data[key] && data[key].allplayers) {
+      filtered[key] = { ...data[key], allplayers: strip(data[key].allplayers) };
+    }
+  }
+  return filtered;
+}
+
+// Player list for the control panel, only sent when something changed
+function sendPlayerList(allplayers) {
+  const players = Object.entries(allplayers || {}).map(([steamid, player]) => ({
+    steamid,
+    name: player.name,
+    team: player.team,
+    observer_slot: player.observer_slot,
+    coach: detectedCoaches.has(steamid),
+    visible: isPlayerVisible(steamid),
+  }));
+  const json = JSON.stringify(players);
+  if (json === playerListJson) return;
+  playerListJson = json;
+  if (controlWindow && !controlWindow.isDestroyed()) {
+    controlWindow.webContents.send("players", players);
+  }
+}
+
 function gsiAll(data) {
+  lastAllPlayers = data.allplayers;
+  detectCoaches(data.allplayers);
+  sendPlayerList(data.allplayers);
   const payload = JSON.stringify({
-    message: { type: "csgsiAll", projectid: "", data },
+    message: { type: "csgsiAll", projectid: "", data: withoutHiddenPlayers(data) },
   });
   log(payload);
   if (!wss) return;

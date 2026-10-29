@@ -13,28 +13,90 @@
         place-items: center;
         justify-content: center;
         gap: 10px;
+        font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+        font-size: 14px;
+        color: #1f1f23;
+        background: #f6f6f8;
+      }
+      button,
+      input {
+        font: inherit;
       }
       button {
-        padding: 5px;
-        font-size: 16px;
+        padding: 7px 10px;
         width: 100%;
+        font-weight: 600;
+        color: #1f1f23;
+        background: #fff;
+        border: 1px solid #d4d4da;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #ececf0;
       }
       #show {
-        border-color: green;
-        color: green;
+        border-color: #2e8b57;
+        color: #2e8b57;
       }
       #hide {
-        border-color: red;
-        color: red;
+        border-color: #d64545;
+        color: #d64545;
       }
       #urlInput {
+        box-sizing: border-box;
+        padding: 7px 10px;
         text-align: center;
-        font-size: 16px;
         height: 100%;
         width: 100%;
+        background: #fff;
+        border: 1px solid #d4d4da;
+        border-radius: 6px;
       }
       #shutdown {
-        background-color: #fc6265;
+        color: #fff;
+        background-color: #d64545;
+        border-color: #d64545;
+      }
+      #shutdown:hover {
+        background-color: #bf3838;
+      }
+      #players {
+        grid-column: 1 / -1;
+        width: 100%;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      #players h3 {
+        margin: 0 0 5px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        color: #6b6b75;
+      }
+      #players label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 0;
+      }
+      .slot {
+        width: 2ch;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+        color: gray;
+      }
+      .coach {
+        color: #c07000;
+        font-size: 12px;
+      }
+      #noPlayers {
+        grid-column: 1 / -1;
+        color: gray;
+      }
+      #resetPlayers {
+        grid-column: 1 / -1;
       }
     </style>
   </head>
@@ -47,6 +109,12 @@
     <button id="hide">Hide Fullscreen Overlay</button>
     <button id="openLogButton">Open Message Log Window</button>
     <button id="shutdown">Shutdown App</button>
+    <div id="players">
+      <div id="noPlayers">No players yet, waiting for GSI data</div>
+      <div><h3>CT</h3><div id="playersCT"></div></div>
+      <div><h3>T</h3><div id="playersT"></div></div>
+      <button id="resetPlayers">Reset Player Visibility</button>
+    </div>
 
     <script>
       const { ipcRenderer } = require("electron");
@@ -86,6 +154,48 @@
 
       document.getElementById("openLogButton").addEventListener("click", () => {
         ipcRenderer.send("open-log-window");
+      });
+
+      // Unchecked players are removed from the GSI data before it is sent to the overlay
+      function renderPlayers(players) {
+        document.getElementById("noPlayers").hidden = players.length > 0;
+        for (const team of ["CT", "T"]) {
+          const list = document.getElementById("players" + team);
+          list.replaceChildren();
+          players
+            .filter((player) => player.team === team)
+            .sort((a, b) => a.observer_slot - b.observer_slot)
+            .forEach((player) => {
+              const label = document.createElement("label");
+              const checkbox = document.createElement("input");
+              checkbox.type = "checkbox";
+              checkbox.checked = player.visible;
+              checkbox.addEventListener("change", () => {
+                ipcRenderer.send("set-player-visible", player.steamid, checkbox.checked);
+              });
+              // Slot 9 is selected with key 0 ingame
+              const slot = document.createElement("span");
+              slot.className = "slot";
+              slot.textContent = player.observer_slot === 9 ? 0 : player.observer_slot + 1;
+              const name = document.createElement("span");
+              name.textContent = player.name;
+              label.append(checkbox, slot, name);
+              if (player.coach) {
+                const coach = document.createElement("span");
+                coach.className = "coach";
+                coach.textContent = "coach?";
+                label.append(coach);
+              }
+              list.append(label);
+            });
+        }
+      }
+
+      ipcRenderer.invoke("get-players").then(renderPlayers);
+      ipcRenderer.on("players", (event, players) => renderPlayers(players));
+
+      document.getElementById("resetPlayers").addEventListener("click", () => {
+        ipcRenderer.send("reset-player-visibility");
       });
     </script>
   </body>
